@@ -1,111 +1,159 @@
-{
- "cells": [
-  {
-   "cell_type": "code",
-   "execution_count": null,
-   "id": "efc7034d",
-   "metadata": {},
-   "outputs": [],
-   "source": [
-    "# trade - 本地化量化交易系统\n",
-    "\n",
-    "## 1. 项目简介\n",
-    "trade 是一个基于 Python 和 MiniQMT 的轻量级、模块化本地量化交易系统。\n",
-    "该系统采用 **\"数据-策略-执行\"** 三层解耦架构，专为具备开发能力的量化交易者设计。\n",
-    "\n",
-    "### 核心特性\n",
-    "* **本地化数据**：基于 Parquet 文件存储全量历史行情，摆脱对交易终端实时连接的依赖。\n",
-    "* **策略解耦**：将策略拆分为 **选股 (Selector)** 和 **择时 (Timer)** 两个独立组件，支持灵活组合。\n",
-    "* **混合驱动**：支持盘后静态选股 (Batch) 与盘中事件驱动交易 (Event-Driven)。\n",
-    "* **QMT 适配**：深度封装 `xtquant` 接口，提供稳定的实盘交易通道。\n",
-    "\n",
-    "---\n",
-    "\n",
-    "## 2. 详细目录说明\n",
-    "\n",
-    "| 目录/文件 | 说明 |\n",
-    "| :--- | :--- |\n",
-    "| **`config/`** | **配置中心**。修改 `settings.py` 以配置 MiniQMT 路径、账号 ID 及数据存储路径。 |\n",
-    "| **`data/`** | **数据仓库**。存放所有落地的数据文件。此目录通常不纳入 Git 版本控制。 |\n",
-    "| **`data_factory/`** | **数据工厂 (ETL)**。负责从 QMT/Tushare 获取数据并清洗存储。包含 `storage` 读写封装。 |\n",
-    "| **`strategy_lab/`** | **策略实验室**。 <br> - `selectors/`: 选股逻辑，输出每日股票池。<br> - `timers/`: 择时逻辑，处理盘中 Tick 信号。<br> - `targets/`: 存放每日生成的选股结果 CSV。 |\n",
-    "| **`execution/`** | **执行引擎**。负责连接 MiniQMT，读取 `targets`，根据 `timers` 信号执行买卖。 |\n",
-    "| **`scripts/`** | **运行脚本**。系统的入口，包含数据更新、盘后选股、盘中交易三个主脚本。 |\n",
-    "\n",
-    "---\n",
-    "\n",
-    "## 3. 标准工作流 (Workflow)\n",
-    "\n",
-    "本系统设计为三个独立的运行阶段，建议通过定时任务 (Crontab / Task Scheduler) 自动化运行。\n",
-    "\n",
-    "### 阶段一：盘后数据同步 (Day End)\n",
-    "* **时间**：每日 16:00\n",
-    "* **入口**：`python scripts/run_data_sync.py`\n",
-    "* **行为**：连接 QMT，下载当日最新日线数据，追加写入 `data/market_data/` 下的 Parquet 文件。\n",
-    "\n",
-    "### 阶段二：策略选股 (Night Analysis)\n",
-    "* **时间**：每日 17:00 (或盘前 08:00)\n",
-    "* **入口**：`python scripts/run_selector.py`\n",
-    "* **行为**：\n",
-    "    1. 读取本地历史数据。\n",
-    "    2. 运行指定选股策略 (如：低估值+动量)。\n",
-    "    3. 生成目标池文件：`strategy_lab/targets/target_YYYYMMDD.csv`。\n",
-    "\n",
-    "### 阶段三：盘中实盘交易 (Intraday Trading)\n",
-    "* **时间**：交易日 09:15 - 15:00\n",
-    "* **入口**：`python scripts/run_execution.py`\n",
-    "* **行为**：\n",
-    "    1. 启动 MiniQMT 客户端（需预先登录）。\n",
-    "    2. 加载阶段二生成的 `target_YYYYMMDD.csv`。\n",
-    "    3. 订阅目标股票的 Tick 数据。\n",
-    "    4. 根据择时策略 (Timer) 实时计算买卖信号并下单。\n",
-    "\n",
-    "---\n",
-    "\n",
-    "## 4. 环境依赖 (Requirements)\n",
-    "\n",
-    "* Python 3.8+\n",
-    "* **核心库**:\n",
-    "    * `pandas` (数据处理)\n",
-    "    * `pyarrow` / `fastparquet` (Parquet 文件读写)\n",
-    "    * `xtquant` (QMT 官方 SDK，需手动安装或引用)\n",
-    "    * `tushare` (可选，用于补充财务数据)\n",
-    "\n",
-    "## 5. 快速开始 (Quick Start)\n",
-    "\n",
-    "1.  **配置环境**:\n",
-    "    在 `config/settings.py` 中填入你的 MiniQMT 安装路径 `userdata_mini` 和资金账号。\n",
-    "\n",
-    "2.  **初始化数据**:\n",
-    "    ```bash\n",
-    "    # 下载最近 30 天的全市场数据\n",
-    "    python scripts/run_data_sync.py --days 30\n",
-    "    ```\n",
-    "\n",
-    "3.  **开发策略**:\n",
-    "    * 在 `strategy_lab/selectors/` 中新建 `my_strategy.py` 继承 `BaseSelector`。\n",
-    "    * 在 `strategy_lab/timers/` 中新建 `my_timer.py` 继承 `BaseTimer`。\n",
-    "\n",
-    "4.  **执行实盘**:\n",
-    "    ```bash\n",
-    "    python scripts/run_execution.py\n",
-    "    ```\n",
-    "\n",
-    "---\n",
-    "\n",
-    "## 6. 注意事项\n",
-    "\n",
-    "* **MiniQMT 依赖**: 运行 `execution` 模块前，必须确保本地 MiniQMT 客户端已启动并登录（保持“极简模式”勾选）。\n",
-    "* **数据路径**: 请确保磁盘有足够的空间存放 Parquet 数据（全市场日线数据较小，分钟线数据较大）。\n",
-    "* **风控**: 默认风控在 `execution/risk_ctrl.py` 中，实盘前请务必检查最大单笔交易金额限制。"
-   ]
-  }
- ],
- "metadata": {
-  "language_info": {
-   "name": "python"
-  }
- },
- "nbformat": 4,
- "nbformat_minor": 5
-}
+# trade - 本地量化交易系统
+
+## 1. 项目简介
+
+`trade` 是一个基于 **Python + MiniQMT** 的轻量级、本地化量化交易系统。
+ 系统采用清晰的 **“数据 - 策略 - 执行”** 三层解耦架构，面向具备一定开发能力的量化交易者，重点解决：
+
+- 本地复盘与回测数据的可控性
+- 策略模块的可插拔与可复用
+- 实盘执行与 QMT 终端之间的稳定衔接
+
+### 核心特性
+
+- **本地化数据仓库**：
+   使用 Parquet 文件存储全量历史行情数据，摆脱对交易终端实时在线的强依赖，更利于回测与研究。
+- **策略模块解耦**：
+   将策略划分为两个相互独立、可自由组合的部分：
+  - **Selector（选股）**：生成每日股票池
+  - **Timer（择时）**：盘中基于 Tick 信号做交易决策
+- **混合驱动模式**：
+   同时支持：
+  - 盘后批量选股（Batch）
+  - 盘中事件驱动交易（Event-Driven）
+- **QMT 适配层**：
+   对 `xtquant` 进行二次封装，统一下单与行情接口，为 MiniQMT 提供稳定的实盘通道。
+
+------
+
+## 2. 目录结构说明
+
+| 目录/文件           | 说明                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| **`config/`**       | **配置中心**。通过 `settings.py` 配置 MiniQMT 路径、资金账号 ID、本地数据存储路径等全局参数。 |
+| **`data/`**         | **数据仓库**。用于存放所有落地后的数据文件（如 Parquet 行情数据）。通常不建议纳入 Git 版本控制。 |
+| **`data_factory/`** | **数据工厂（ETL）**。负责从 QMT / Tushare 等数据源拉取、清洗并落地数据；包含统一的 `storage` 读写封装。 |
+| **`strategy_lab/`** | **策略实验室**。 - `selectors/`：选股逻辑模块，输出每日股票池。 - `timers/`：择时逻辑模块，基于 Tick 生成买卖信号。 - `targets/`：存放每日生成的目标池 CSV 文件。 |
+| **`execution/`**    | **执行引擎**。负责连接 MiniQMT，加载 `targets` 中的目标股票池，并结合 `timers` 的信号执行买卖。 |
+| **`scripts/`**      | **运行脚本入口**。包含数据同步、盘后选股、盘中实盘交易等主要脚本。 |
+
+------
+
+## 3. 标准工作流（Workflow）
+
+系统被设计为三个相互独立、可通过定时任务（Crontab / Task Scheduler）自动串联的阶段。
+
+### 阶段一：盘后数据同步（Day End）
+
+- **建议时间**：每日 16:00 左右
+
+- **执行命令**：
+
+  ```bash
+  python scripts/run_data_sync.py
+  ```
+
+- **主要行为**：
+
+  1. 连接 QMT，获取当日最新行情（如日线 / 分钟线）。
+  2. 将增量数据追加写入 `data/market_data/` 目录下的 Parquet 文件。
+  3. 保持本地数据仓库与市场数据日常同步。
+
+------
+
+### 阶段二：策略选股（Night Analysis）
+
+- **建议时间**：每日 17:00，或盘前 08:00
+
+- **执行命令**：
+
+  ```bash
+  python scripts/run_selector.py
+  ```
+
+- **主要行为**：
+
+  1. 读取本地历史行情及相关因子数据。
+  2. 运行指定选股策略（例如：低估值 + 动量等组合逻辑）。
+  3. 生成当日目标池文件：
+      `strategy_lab/targets/target_YYYYMMDD.csv`。
+
+------
+
+### 阶段三：盘中实盘交易（Intraday Trading）
+
+- **时间范围**：交易日 09:15 - 15:00
+
+- **执行命令**：
+
+  ```bash
+  python scripts/run_execution.py
+  ```
+
+- **主要行为**：
+
+  1. 启动并登录 MiniQMT 客户端（需提前完成，建议勾选“极简模式”）。
+  2. 加载阶段二生成的 `target_YYYYMMDD.csv` 目标池。
+  3. 订阅目标股票的实时 Tick 行情。
+  4. 根据 Timer（择时模块）实时计算买卖信号，并通过 QMT 通道下单。
+
+------
+
+## 4. 环境依赖（Requirements）
+
+- **Python**：3.8 及以上版本
+- **核心依赖库**：
+  - `pandas`：数据处理与分析
+  - `pyarrow` / `fastparquet`：Parquet 文件读写
+  - `xtquant`：QMT 官方 SDK（需手动安装或引用本地包）
+  - `tushare`（可选）：补充财务数据、因子数据等
+
+------
+
+## 5. 快速开始（Quick Start）
+
+1. **配置环境**
+
+   在 `config/settings.py` 中配置以下内容：
+
+   - MiniQMT 安装路径：`userdata_mini`
+   - 资金账号及对应交易服务器信息
+   - 本地数据存储目录
+
+2. **初始化数据**
+
+   首次使用时可先拉取一段历史数据用于测试与回测，例如最近 30 个交易日：
+
+   ```bash
+   # 下载最近 30 天的全市场行情数据
+   python scripts/run_data_sync.py --days 30
+   ```
+
+3. **开发与接入策略**
+
+   - 在 `strategy_lab/selectors/` 中新建 `my_strategy.py`，继承 `BaseSelector`，实现自定义选股逻辑。
+   - 在 `strategy_lab/timers/` 中新建 `my_timer.py`，继承 `BaseTimer`，实现自定义择时逻辑（如信号生成与仓位管理）。
+
+4. **启动实盘执行**
+
+   在确保 MiniQMT 已启动并登录后，运行实盘执行脚本：
+
+   ```bash
+   python scripts/run_execution.py
+   ```
+
+------
+
+## 6. 注意事项
+
+- **MiniQMT 依赖**
+   启动 `execution` 模块前，务必先打开并登录 MiniQMT 客户端，且建议保持“极简模式”开启，以降低干扰与资源占用。
+- **数据存储空间**
+   请预留充足的磁盘空间用于存放 Parquet 数据：
+  - 全市场日线数据体积较小，一般压力不大；
+  - 分钟级 / Tick 级数据体积会显著增大，需提前规划。
+- **风控设置**
+   系统默认风控逻辑位于 `execution/risk_ctrl.py` 中，包括：
+  - 单笔最大下单金额限制
+  - 单票持仓上限等
+     在接入真实资金之前，务必根据自身风险偏好仔细检查和修改相关配置。
