@@ -3,6 +3,7 @@
 
 from .path_config import (
     PROJECT_ROOT,
+    DATA_ROOT,
     MARKET_DATA_DIR,
     BASIC_INFO_DIR,
     STRATEGY_WORKSPACE,
